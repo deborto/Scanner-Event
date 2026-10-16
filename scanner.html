@@ -1,0 +1,231 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 560px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f6f8;
+      color: #222;
+    }
+
+    h1 { font-size: 24px; }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 18px;
+      margin: 14px 0;
+      box-shadow: 0 2px 8px #0001;
+    }
+
+    input, button {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 13px;
+      margin-top: 9px;
+      font-size: 16px;
+      border-radius: 8px;
+    }
+
+    input { border: 1px solid #bbb; }
+
+    button {
+      border: none;
+      background: #174ea6;
+      color: white;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    button:disabled { opacity: 0.5; cursor: wait; }
+
+    #result {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.5;
+      margin-top: 14px;
+    }
+
+    .success { color: #137333; }
+    .error { color: #b3261e; }
+    .warning { color: #a15c00; }
+
+    #reader { width: 100%; overflow: hidden; }
+  </style>
+</head>
+
+<body>
+  <h1>UPMin Event Check-in</h1>
+  <p>Scan a guest's QR code to verify their ticket and record attendance.</p>
+
+  <div class="card">
+    <label for="pin"><b>Scanner PIN</b></label>
+    <input
+      id="pin"
+      type="password"
+      placeholder="Enter scanner PIN"
+      autocomplete="off"
+    >
+
+    <label for="ticket"><b>Ticket ID</b></label>
+    <input
+      id="ticket"
+      type="text"
+      placeholder="Scan or enter ticket ID"
+      autocomplete="off"
+    >
+
+    <button id="checkButton" onclick="submitTicket()">
+      Check In Ticket
+    </button>
+
+    <button id="cameraButton" onclick="toggleCamera()">
+      Start Camera Scanner
+    </button>
+
+    <div id="reader"></div>
+    <div id="result" role="status" aria-live="polite"></div>
+  </div>
+
+  <script>
+    let scanner = null;
+    let cameraRunning = false;
+    let busy = false;
+
+    function showResult(data) {
+      const result = document.getElementById("result");
+      result.replaceChildren();
+
+      const heading = document.createElement("strong");
+      heading.textContent = data.message || "No response";
+      result.appendChild(heading);
+
+      const fields = [
+        ["Name", data.name],
+        ["Ticket", data.ticketNo],
+        ["Individual ticket", data.ticketIndex],
+        ["Tier", data.tier],
+        ["Check-in time", data.checkInTime || data.previousTime]
+      ];
+
+      fields.forEach(function(field) {
+        if (field[1] === undefined || field[1] === "") return;
+
+        const line = document.createElement("div");
+        line.textContent = field[0] + ": " + field[1];
+        result.appendChild(line);
+      });
+
+      result.className = data.success
+        ? "success"
+        : (data.duplicate ? "warning" : "error");
+    }
+
+    function submitTicket() {
+      if (busy) return;
+
+      const pin = document.getElementById("pin").value;
+      const ticket = document.getElementById("ticket").value.trim();
+      const button = document.getElementById("checkButton");
+
+      if (!pin || !ticket) {
+        showResult({
+          success: false,
+          message: "Enter the PIN and scan a ticket first."
+        });
+        return;
+      }
+
+      busy = true;
+      button.disabled = true;
+      document.getElementById("result").textContent =
+        "Checking ticket...";
+
+      google.script.run
+        .withSuccessHandler(function(data) {
+          showResult(data);
+          busy = false;
+          button.disabled = false;
+          document.getElementById("ticket").value = "";
+          document.getElementById("ticket").focus();
+        })
+        .withFailureHandler(function(error) {
+          showResult({
+            success: false,
+            message: "Connection error: " + error.message
+          });
+          busy = false;
+          button.disabled = false;
+        })
+        .checkInTicket(ticket, pin);
+    }
+
+    document.getElementById("ticket").addEventListener(
+      "keydown",
+      function(event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submitTicket();
+        }
+      }
+    );
+
+    async function toggleCamera() {
+      const button = document.getElementById("cameraButton");
+
+      if (cameraRunning) {
+        await scanner.stop();
+        cameraRunning = false;
+        button.textContent = "Start Camera Scanner";
+        return;
+      }
+
+      try {
+        if (!window.Html5Qrcode) {
+          throw new Error("QR scanner library failed to load.");
+        }
+
+        if (!scanner) scanner = new Html5Qrcode("reader");
+
+        await scanner.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 240, height: 240 } },
+          function(decodedText) {
+            if (busy) return;
+
+            document.getElementById("ticket").value = decodedText;
+            submitTicket();
+          },
+          function() {}
+        );
+
+        cameraRunning = true;
+        button.textContent = "Stop Camera Scanner";
+
+      } catch (error) {
+        console.error("Camera startup error:", error);
+
+        const details =
+          error && error.message
+            ? error.message
+            : String(error);
+
+        showResult({
+          success: false,
+          message: "Camera could not start: " + details
+        });
+    }
+
+    }
+  </script>
+</body>
+</html>
